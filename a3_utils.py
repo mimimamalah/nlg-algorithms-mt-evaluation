@@ -84,6 +84,7 @@ class GeneratorForCausalLM():
     # NOTE: Implement the following if you would like to. Not required!
     ############################################################################
     @torch.no_grad()
+    
     def prepare_next_inputs(
             self,
             model_inputs: dict,
@@ -110,8 +111,22 @@ class GeneratorForCausalLM():
         Returns:
             dict: the next model input dictionary
         """
-        
-        pass
+        device = torch.device('cuda' if use_cuda else 'cpu')
+
+        new_token_id = new_token_id.to(device)  # Ensure the new token is on the correct device
+
+        new_input_ids = torch.cat([model_inputs["input_ids"], new_token_id], dim=-1)
+        new_attention_mask = torch.cat([
+            model_inputs["attention_mask"],
+            torch.ones((1, new_token_id.size(1)), dtype=torch.long, device=device)
+        ], dim=-1)
+
+        next_inputs = {
+            "input_ids": new_input_ids,
+            "attention_mask": new_attention_mask
+        }
+
+        return next_inputs
 
 
 def load_seed(seed : int):

@@ -93,9 +93,27 @@ class GreedySearchDecoderForCausalLM(GeneratorForCausalLM):
         #   more readable. There isn't a unique solution for this so use it as you wish
         #   or create another function in this super class.
         ########################################################################
+ 
+        self.model.eval()
 
-        pass
+        # Ensure all inputs are on the same device as the model
+        device = next(self.model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()} 
 
+        inputs = inputs
+        for _ in range(max_new_tokens):
+            outputs = self.model(**inputs)
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token_id = torch.argmax(next_token_logits,dim=-1).unsqueeze(-1)
+            if next_token_id.item() == self.tokenizer.eos_token_id:
+                break
+
+            inputs = self.prepare_next_inputs(
+                model_inputs = inputs,
+                new_token_id = next_token_id,
+                use_cuda=(device.type == 'cuda'))
+
+        return inputs['input_ids']
 
 class BeamSearchDecoderForCausalLM(GeneratorForCausalLM):
     ###########################################################################
@@ -177,8 +195,95 @@ class BeamSearchDecoderForCausalLM(GeneratorForCausalLM):
         #
         # For hints, read the todo statement in GreedySearchDecoderForCausalLM.
         ########################################################################
-        pass
 
+        device = next(self.model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        input_ids = inputs['input_ids'].repeat(num_beams, 1)
+        attention_mask = inputs['attention_mask'].repeat(num_beams, 1)
+
+        start = input_ids.shape[1]
+
+        beam_scores = torch.full((num_beams,), float('-inf'), device=device)
+        beam_scores[0] = 0.0
+
+        for _ in range(max_new_tokens):
+
+            outputs = self.model(input_ids, attention_mask=attention_mask)
+
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token_scores = torch.nn.functional.log_softmax(next_token_logits, dim=-1)
+            next_token_scores += beam_scores[:, None].expand_as(next_token_scores)
+
+            vocab_size = next_token_scores.shape[-1]
+            next_token_scores = next_token_scores.view(1, num_beams * vocab_size)
+
+            next_token_scores, next_tokens = torch.topk(next_token_scores, num_beams, dim=1, largest=True, sorted=True)
+
+            next_indices = next_tokens // vocab_size
+            next_tokens = next_tokens % vocab_size
+
+            finished = next_tokens == self.eos_token_id
+            ongoing_tokens = next_tokens[~finished]
+            ongoing_indices = next_indices[~finished]
+            ongoing_scores = next_token_scores[~finished]
+
+            _, top_idxs = torch.topk(ongoing_scores, min(num_beams, ongoing_scores.size(0)))
+
+            beam_tokens, beam_indices, beam_scores = ongoing_tokens[top_idxs], ongoing_indices[top_idxs], ongoing_scores[top_idxs]
+
+            input_ids = torch.cat([input_ids[beam_indices, :], beam_tokens.unsqueeze(1)], dim=-1)
+
+            new_mask = torch.tensor([[1] for _ in range(num_beams)], device=device)
+            attention_mask = torch.cat([attention_mask, new_mask], dim=-1)
+
+
+        if length_penalty != 0:
+            adjusted_scores = beam_scores / ((input_ids.size(1) - start) ** length_penalty)
+        else:
+            adjusted_scores = beam_scores
+
+        sorted_indices = torch.argsort(adjusted_scores, descending=True)
+        top_input_ids = input_ids[sorted_indices][:num_return_sequences]
+        top_scores = adjusted_scores[sorted_indices][:num_return_sequences]
+
+        padded_input_ids = pad_sequences(top_input_ids, self.tokenizer.eos_token_id, num_return_sequences, top_input_ids.size(1))
+        input_ids, beam_scores = padded_input_ids, top_scores
+
+        return {
+            'sequences': input_ids.long()[:num_return_sequences, :],
+            'sequences_scores': beam_scores[:num_return_sequences].tolist()
+        }
+
+
+"""
+Name of the AI-based tool : ChatGPT
+Prompt used if any : Could you pad sequences of token IDs to a uniform length for processing up to max_len using the EOS token.
+Output of the tool : The function below 
+A brief explanation of how you verified the correctness of the output for your use case and the modifications you did :
+No modification, it helped me pass A3 tests
+A brief explanation of why your AI-based code does what it is supposed to do :
+Sequences shorter than max_len are extended using the eos_token_id, ensuring all sequences in the batch are of equal length. This uniformity is required for consistent processing.
+A mask is created to identify positions in the tensor where the original input_ids need to be placed, and the padding (EOS tokens) should fill the remaining positions. 
+"""
+def pad_sequences(input_ids, eos_token_id, num_return_sequences, max_len):
+    """
+    Pads the input sequences up to max_len using the EOS token.
+
+    Args:
+        input_ids (torch.Tensor): The tensor containing the sequences to be padded.
+        eos_token_id (int): The end of sequence token id used for padding.
+        num_return_sequences (int): The number of sequences expected to return.
+        max_len (int): The maximum length to pad the sequences to.
+
+    Returns:
+        torch.Tensor: The padded tensor of input sequences.
+    """
+    padded_input_ids = torch.full((num_return_sequences, max_len), eos_token_id, dtype=torch.long, device=input_ids.device)
+    mask = torch.arange(max_len, device=input_ids.device).expand(num_return_sequences, max_len) < input_ids.size(1)
+    padded_input_ids[mask] = input_ids.flatten()
+
+    return padded_input_ids
 
 def main():
     ############################################################################

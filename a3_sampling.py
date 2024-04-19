@@ -64,8 +64,38 @@ class TopKSamplerForCausalLM(GeneratorForCausalLM):
         #
         # For hints, read the todo statement in GreedySearchDecoderForCausalLM.
         ########################################################################
-        
-        pass
+
+        device = next(self.model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        generated_tokens = inputs['input_ids']
+
+        for _ in range(max_new_tokens):
+            outputs = self.model(**inputs)
+            logits = outputs.logits[:, -1, :]
+            scaled_logits = logits / temperature
+
+            log_probabilities = torch.nn.functional.log_softmax(scaled_logits, dim=-1)
+            top_k_log_probs, top_k_indices = torch.topk(log_probabilities, top_k)
+
+            probabilities = torch.exp(top_k_log_probs)
+            next_token_id = torch.multinomial(probabilities, 1) 
+
+            next_token_id = top_k_indices.gather(-1, next_token_id) 
+
+            if next_token_id.item() == self.tokenizer.eos_token_id:
+                break
+
+            generated_tokens = torch.cat((generated_tokens, next_token_id), dim=1)
+            
+            inputs = self.prepare_next_inputs(
+                model_inputs=inputs,
+                new_token_id=next_token_id,
+                use_cuda=(device.type == 'cuda'))
+
+        return generated_tokens
+
+
 
 
 class TopPSamplerForCausalLM(GeneratorForCausalLM):
@@ -133,7 +163,40 @@ class TopPSamplerForCausalLM(GeneratorForCausalLM):
         # For hints, read the todo statement in GreedySearchDecoderForCausalLM.
         ########################################################################
         
-        pass
+        device = next(self.model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        generated_tokens = inputs['input_ids']
+
+        for _ in range(max_new_tokens):
+            outputs = self.model(**inputs)
+            logits = outputs.logits[:, -1, :] / temperature
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.cumsum(torch.exp(torch.nn.functional.log_softmax(sorted_logits, dim=-1)), dim=-1)
+
+            # Remove tokens with cumulative probability above the threshold top_p
+            sorted_indices_to_remove = cumulative_probs > top_p
+            # Shift the indices to the right to keep the first token above the threshold
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = 0
+
+            indices_to_remove = sorted_indices[sorted_indices_to_remove]
+            logits[:, indices_to_remove] = -float('Inf')
+            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+            probabilities = torch.exp(log_probs)  # Convert log probabilities back for sampling
+
+            next_token_id = torch.multinomial(probabilities, 1)
+
+            if next_token_id.item() == self.tokenizer.eos_token_id:
+                break
+
+            generated_tokens = torch.cat((generated_tokens, next_token_id), dim=1)
+            inputs = self.prepare_next_inputs(
+                model_inputs=inputs,
+                new_token_id=next_token_id,
+                use_cuda=(device.type == 'cuda'))
+
+        return generated_tokens
 
 
 def main():
