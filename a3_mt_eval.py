@@ -48,9 +48,9 @@ def calculate_metrics():
     ############################################################################
     # TODO: load the BLEU, BERTScore and COMET metrics from the evaluate package
     ############################################################################
-    bleu = ...
-    bertscore = ...
-    comet = ...
+    bleu = evaluate.load("bleu")
+    bertscore = evaluate.load("bertscore")
+    comet = evaluate.load("comet")
     
     # NOTE: of the form {metric_name: {entry_id: score, ...}, ...}
     metric_dict = {}
@@ -75,7 +75,21 @@ def calculate_metrics():
     metric_dict["bleu-1"] = {}
     metric_dict["bleu-4"] = {}
     
-    ...
+    bleu_scores_list = []
+    bleu_1_scores_list = []
+    bleu_4_scores_list = []
+    
+    for index, row in tqdm(wmt_da_df.iterrows(), total=wmt_da_df.shape[0]):
+        reference = [row['ref']]
+        hypothesis = row['mt']
+        bleu_result = bleu.compute(predictions=[hypothesis], references=[reference])
+        bleu_scores_list.append(bleu_result['bleu'])
+        bleu_1_scores_list.append(bleu_result['precisions'][0])
+        bleu_4_scores_list.append(bleu_result['precisions'][3])
+    
+    metric_dict["bleu"] = create_entryid2score(wmt_da_df['entry_id'], bleu_scores_list)
+    metric_dict["bleu-1"] = create_entryid2score(wmt_da_df['entry_id'], bleu_1_scores_list)
+    metric_dict["bleu-4"] = create_entryid2score(wmt_da_df['entry_id'], bleu_4_scores_list)
     
     print("Done.")
         
@@ -98,8 +112,16 @@ def calculate_metrics():
     metric_dict["bertscore-precision"] = {}
     metric_dict["bertscore-recall"] = {}
     metric_dict["bertscore-f1"] = {}
-    
-    ...
+
+    for lang, group in tqdm(wmt_da_df.groupby('lp')):
+        predictions = group['mt'].tolist()
+        references = group['ref'].tolist()
+        lang_code = lang.split('-')[1] 
+        scores = bertscore.compute(predictions=predictions, references=references, lang=lang_code)
+        
+        metric_dict['bertscore-precision'].update(create_entryid2score(group['entry_id'], scores['precision']))
+        metric_dict['bertscore-recall'].update(create_entryid2score(group['entry_id'], scores['recall']))
+        metric_dict['bertscore-f1'].update(create_entryid2score(group['entry_id'], scores['f1']))
     
     print("Done.")
     
@@ -113,8 +135,15 @@ def calculate_metrics():
     print("-" * 50)
     print("Calculating COMET...")
     metric_dict["comet"] = {}
+
+    comet_scores = comet.compute(
+        predictions=wmt_da_df['mt'].tolist(), 
+        references=wmt_da_df['ref'].tolist(), 
+        sources=wmt_da_df['src'].tolist()
+    )
+
+    metric_dict['comet'] = create_entryid2score(wmt_da_df['entry_id'], comet_scores['scores'])
     
-    ...
     
     print("Done.")
     
@@ -141,11 +170,19 @@ def evaluate_metrics():
     #       (worse hypothesis id, better_hypothesis id)
     #       Hint: use combinations from itertools!
     ############################################################################
-    
-    rank_pairs_list = ...
+    rank_pairs_list = []
+    grouped = wmt_da_df.groupby(['src', 'lp'])
+
+    for name, group in grouped:
+        sorted_group = group.sort_values('score', ascending=True)
+        entry_ids = sorted_group['entry_id'].tolist()
+        
+        group_combinations = list(combinations(entry_ids, 2))
+        rank_pairs_list.extend(group_combinations)
+
     # NOTE: The following should be ~3351
     print("Size of rank combinations: ", len(rank_pairs_list))
-    
+  
     ############################################################################
     # 2) Create a class to calculate Kendalls Tau for each metric
     ############################################################################
@@ -173,14 +210,22 @@ def evaluate_metrics():
                 better_hyp_score (float): the score for the better hypothesis 
                         according to human ranking
             """
-            pass
+            if better_hyp_score > worse_hyp_score:
+                self.concordant += 1
+            elif better_hyp_score < worse_hyp_score:
+                self.discordant += 1
+            self.total += 1
 
         def compute(self):
             """
             Calculates the Kendall's Tau correlation coefficient. 
             Call when all ranked pairs have been evaluated.
             """
-            pass
+            num_pairs = self.concordant + self.discordant  
+            if num_pairs == 0:
+                return 0 
+            return (self.concordant - self.discordant) / num_pairs
+
     
     ############################################################################
     # 3) Calculate Kendall's Tau correlation for each metric
@@ -191,8 +236,18 @@ def evaluate_metrics():
     metric_dict = load_json("part3_metrics.json")
     metric2kendalls = {}
     
-    ...
-    
+    for metric_name, scores_dict in metric_dict.items():
+        kendalls_tau_calculator = KendallsTau()
+        
+        for worse_id, better_id in rank_pairs_list:
+            worse_score = scores_dict[str(worse_id)]
+            better_score = scores_dict[str(better_id)]
+            
+            kendalls_tau_calculator.update(worse_score, better_score)
+
+        metric2kendalls[metric_name] = kendalls_tau_calculator.compute()
+
+
     ############################################################################
     # 4) Save the output in a JSON file
     ############################################################################
