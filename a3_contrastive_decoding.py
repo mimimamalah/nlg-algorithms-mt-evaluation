@@ -31,13 +31,19 @@ def filter_using_adaptive_plausibility_constraint(
         The tokens with scores below this threshold are replaced with `filter_value`.
     """
 
-    threshold = scores.max(dim=-1).values * alpha
+    probabilities = torch.nn.functional.softmax(scores, dim=-1)
 
-    scores_normalized = torch.where(scores < threshold, filter_value, scores)
+    max_probabilities, _ = torch.max(probabilities, dim=-1)
 
-    best_idx = torch.argsort(scores_normalized, dim=-1, descending=True)[0, :min_tokens_to_keep]
-    scores_normalized[:, :best_idx] = scores_normalized[:, best_idx]
+    threshold = max_probabilities * alpha
 
+    mask = probabilities >= threshold
+
+    if min_tokens_to_keep > 1:
+        _, top_indices = torch.topk(probabilities, min_tokens_to_keep, dim=-1)
+        mask.scatter_(dim=-1, index=top_indices, value=True)
+
+    scores_normalized = torch.where(mask, scores, filter_value * torch.ones_like(scores))
     return scores_normalized 
 
 @torch.no_grad()
@@ -113,8 +119,8 @@ def greedy_search_with_contrastive_decoding(
         next_tokens_scores = torch.nn.functional.log_softmax(next_tokens_scores, dim=-1) - next_token_probs_amateur
 
         # TODO: take the argmax to predict the next token then add it to the input_ids 
-        next_tokens = torch.argmax(next_tokens_scores, keepdim=True)
-        input_ids = torch.cat([input_ids, next_tokens], dim=-1)
+        next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+        input_ids = torch.cat([input_ids, next_tokens.unsqueeze(-1)], dim=-1)
 
         model_kwargs = model._update_model_kwargs_for_generation(
             outputs, model_kwargs, is_encoder_decoder=model.config.is_encoder_decoder

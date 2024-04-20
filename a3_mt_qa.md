@@ -41,16 +41,18 @@
 
 #### Q3: Given your understanding of BLEU, BERTScore and COMET, how would you interpret the Kendall's Tau correlation results? Which ones are the least and most correlated? What is your hypothesis regarding the reasons behind the lowest correlation for one metric and the highest correlation in the other?
 
-- **COMET** has the highest positive correlation (`0.29266`), indicating that it agrees with human judgment most frequently among these metrics. 
+- **COMET** has the highest positive correlation (`0.28916`), indicating that it agrees with human judgment most frequently among these metrics. 
   This may be due to COMET's approach to evaluating translations by considering the semantics of the entire sentence and the ability to learn from human evaluations directly.
   
-- **BERTScore-Precision** has the next highest correlation (`0.23907`), followed closely by **BERTScore-F1** (`0.23604`) and **BERTScore-Recall** (`0.23179`). 
+- **BERTScore-Precision** has the next highest correlation (`0.23513`), followed by **BERTScore-F1** (`0.23217`) and **BERTScore-Recall** (`0.22799`). 
   BERTScore's use of contextual embeddings likely helps it to capture semantic meanings more effectively than metrics based purely on n-gram overlap. The fact that precision, recall, and F1 are all similar suggests that BERTScore is balancing these aspects well in the context of this dataset.
   
-- **BLEU** shows a lower correlation (`0.23276`) compared to COMET and BERTScore.
+- **BLEU** shows a lower correlation (`0.15010`) compared to COMET and BERTScore.
   This is possibly because BLEU primarily focuses on n-gram overlap, which may not capture the fluency and semantic qualities that human judges consider.
 
-- The **BLEU-1** score, which measures unigram precision, has the lowest positive correlation (`0.17456`). This might be because unigram precision alone does not capture the complexity of the translation task, such as the correct order of words and their context within a sentence, which are more heavily weighted by human judges.
+- BLEU-1 and BLEU-4 have the lowest correlations (0.15398 and 0.13369, respectively), implying that they are the least aligned with human judgment. 
+The lower correlation of BLEU-1 suggests that unigram matching is a poor indicator of text quality, possibly because it ignores larger linguistic structures. 
+BLEU-4's even lower score could indicate that longer n-gram matches become increasingly rare and less indicative of overall quality in the types of texts being evaluated.
 
 - In conclusion, the metrics that account for semantics and sentence-level context (like COMET and BERTScore) are more likely to agree with human judgment than those based on surface-level features like n-gram overlap (like BLEU). This shows the importance of context and meaning in translation quality evaluation, rather than just matching individual words or phrases.
 

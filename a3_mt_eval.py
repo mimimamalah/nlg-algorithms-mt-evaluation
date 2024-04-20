@@ -221,7 +221,7 @@ def evaluate_metrics():
             Calculates the Kendall's Tau correlation coefficient. 
             Call when all ranked pairs have been evaluated.
             """
-            num_pairs = self.concordant + self.discordant  
+            num_pairs = self.total
             if num_pairs == 0:
                 return 0 
             return (self.concordant - self.discordant) / num_pairs
